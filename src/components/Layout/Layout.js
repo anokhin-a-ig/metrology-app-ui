@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import DepartmentsPage from '../Departments/DepartmentsPage';
+import { UI_VERSION, fetchBackendVersion } from '../../services/version';
 
 const SECTIONS = [
   { id: 'departments', label: 'Департаменты' },
@@ -9,6 +10,27 @@ const SECTIONS = [
 
 export default function Layout() {
   const [activeSection, setActiveSection] = useState('departments');
+  const [backendVersion, setBackendVersion] = useState('загрузка…');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchBackendVersion()
+      .then((version) => {
+        if (!cancelled) {
+          setBackendVersion(version);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBackendVersion('недоступна');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="layout">
@@ -31,6 +53,11 @@ export default function Layout() {
             </button>
           ))}
         </nav>
+
+        <div className="layout__versions">
+          <span>UI: {UI_VERSION}</span>
+          <span>Бэкенд: {backendVersion}</span>
+        </div>
       </aside>
 
       <main className="layout__content">

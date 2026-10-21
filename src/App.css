@@ -14,7 +14,9 @@ body {
 }
 
 .layout__sidebar {
+  display: flex;
   flex: 0 0 240px;
+  flex-direction: column;
   padding: 24px 16px;
   background-color: #1f2937;
   color: #f9fafb;
@@ -51,6 +53,17 @@ body {
 .layout__nav-button--active {
   background-color: #2563eb;
   color: #ffffff;
+}
+
+.layout__versions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid #374151;
+  font-size: 12px;
+  color: #9ca3af;
 }
 
 .layout__content {

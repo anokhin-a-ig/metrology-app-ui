@@ -2,8 +2,16 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import App from '../App';
 
 beforeEach(() => {
-  global.fetch = jest.fn(() =>
-    Promise.resolve({
+  global.fetch = jest.fn((url) => {
+    if (String(url).includes('/actuator/info')) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ build: { version: '1.0.0-SNAPSHOT' } }),
+      });
+    }
+
+    return Promise.resolve({
       ok: true,
       status: 200,
       json: () =>
@@ -14,8 +22,8 @@ beforeEach(() => {
           first: true,
           last: true,
         }),
-    })
-  );
+    });
+  });
 });
 
 test('переключает разделы меню и показывает заглушку', async () => {
@@ -23,6 +31,10 @@ test('переключает разделы меню и показывает з�
 
   expect(await screen.findByText('Департаменты не найдены')).toBeInTheDocument();
   expect(screen.getByRole('heading', { name: 'Департаменты' })).toBeInTheDocument();
+  expect(screen.getByText(/^UI: /)).toBeInTheDocument();
+  expect(
+    await screen.findByText('Бэкенд: 1.0.0-SNAPSHOT')
+  ).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: 'Приборы' }));
   expect(screen.getByText('Появится скоро')).toBeInTheDocument();
