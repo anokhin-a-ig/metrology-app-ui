@@ -2,7 +2,7 @@
 
 ## Состояние проекта
 - Create React App + React 19, JavaScript (без TypeScript). `App` — пока дефолтная заглушка CRA.
-- Сборка сломана: `src/App.js` импортирует `./logo.svg`, `src/index.js` — `./reportWebVitals`, но оба файла удалены в рабочем дереве. Убери/восстанови импорты до запуска.
+- `src/logo.svg` и `src/reportWebVitals.js` удалены — не импортировать их (импорты из CRA-заглушки уже убраны, `npm start`/`npm run build` проходят).
 - `README.md` — стандартный CRA-шаблон, не описывает проект. Требования: `openspec/department-table.md` и `openspec/specs/department-catalog/spec.md`.
 
 ## Команды
