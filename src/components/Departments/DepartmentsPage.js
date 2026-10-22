@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { PAGE_SIZE, SORT_DIRECTION } from '../../services/constants';
 import { fetchChildrenPage, fetchRootPage } from '../../services/departments';
+import DepartmentCreateModal from './DepartmentCreateModal';
 import DepartmentTable from './DepartmentTable';
 import Legend from './Legend';
 import Pagination from './Pagination';
@@ -35,6 +36,8 @@ export default function DepartmentsPage() {
   const [page, setPage] = useState(INITIAL_PAGE);
   const [expanded, setExpanded] = useState(() => new Set());
   const [childrenByParent, setChildrenByParent] = useState({});
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [successMessage, setSuccessMessage] = useState(null);
 
   const loadRoot = useCallback(async (targetPage) => {
     setPage((previous) => ({ ...previous, loading: true, error: null }));
@@ -105,6 +108,117 @@ export default function DepartmentsPage() {
     }
   }, []);
 
+  const refreshChildren = useCallback(
+    async (parentId) => {
+      const entry = childrenByParent[parentId];
+      if (!entry) {
+        return;
+      }
+
+      setChildrenByParent((previous) => ({
+        ...previous,
+        [parentId]: {
+          ...(previous[parentId] || EMPTY_CHILDREN),
+          loading: true,
+          error: null,
+        },
+      }));
+
+      try {
+        const pages = await Promise.all(
+          Array.from({ length: entry.page + 1 }, (_, index) =>
+            fetchChildrenPage({
+              parentId,
+              page: index,
+              size: PAGE_SIZE,
+              sortBy: SORT_DIRECTION,
+            })
+          )
+        );
+        const lastPage = pages[pages.length - 1];
+        const items = mergeById(
+          [],
+          pages.flatMap((childrenPage) => childrenPage.content || [])
+        );
+
+        setChildrenByParent((previous) => ({
+          ...previous,
+          [parentId]: {
+            items,
+            page: entry.page,
+            totalPages: lastPage ? lastPage.totalPages ?? entry.totalPages : entry.totalPages,
+            last: lastPage ? lastPage.last ?? entry.last : entry.last,
+            loading: false,
+            error: null,
+          },
+        }));
+      } catch (error) {
+        setChildrenByParent((previous) => ({
+          ...previous,
+          [parentId]: {
+            ...(previous[parentId] || EMPTY_CHILDREN),
+            loading: false,
+            error: error.message,
+          },
+        }));
+      }
+    },
+    [childrenByParent]
+  );
+
+  const markParentHasChildren = useCallback((parentId) => {
+    setPage((previous) => ({
+      ...previous,
+      items: previous.items.map((department) =>
+        department.id === parentId ? { ...department, hasChildren: true } : department
+      ),
+    }));
+
+    setChildrenByParent((previous) => {
+      let changed = false;
+
+      const next = Object.fromEntries(
+        Object.entries(previous).map(([key, entry]) => {
+          let entryChanged = false;
+          const items = entry.items.map((department) => {
+            if (department.id === parentId && !department.hasChildren) {
+              entryChanged = true;
+              return { ...department, hasChildren: true };
+            }
+            return department;
+          });
+
+          if (entryChanged) {
+            changed = true;
+            return [key, { ...entry, items }];
+          }
+
+          return [key, entry];
+        })
+      );
+
+      return changed ? next : previous;
+    });
+  }, []);
+
+  const handleCreated = useCallback(
+    (created) => {
+      setIsCreateOpen(false);
+      setSuccessMessage(`Департамент «${created.name}» создан`);
+
+      if (created.type === 'FACTORY') {
+        loadRoot(pageNumber);
+        return;
+      }
+
+      if (created.parent && created.parent.id) {
+        markParentHasChildren(created.parent.id);
+        refreshChildren(created.parent.id);
+      }
+    },
+    [loadRoot, markParentHasChildren, pageNumber, refreshChildren]
+  );
+
   const handleToggle = useCallback(
     (department) => {
       const isExpanded = expanded.has(department.id);
@@ -155,9 +269,29 @@ export default function DepartmentsPage() {
     loadRoot(pageNumber);
   }, [loadRoot, pageNumber, reloadToken]);
 
+  useEffect(() => {
+    setSuccessMessage(null);
+  }, [pageNumber]);
+
   return (
     <section className="departments">
-      <h2 className="departments__title">Департаменты</h2>
+      <div className="departments__header">
+        <h2 className="departments__title">Департаменты</h2>
+        <button
+          type="button"
+          className="departments__create"
+          onClick={() => setIsCreateOpen(true)}
+        >
+          Новый
+        </button>
+      </div>
+
+      {successMessage && (
+        <p className="departments__success" role="status">
+          {successMessage}
+        </p>
+      )}
+
       <Legend />
 
       {page.error && !page.loading ? (
@@ -194,6 +328,13 @@ export default function DepartmentsPage() {
             disabled={page.loading}
           />
         </>
+      )}
+
+      {isCreateOpen && (
+        <DepartmentCreateModal
+          onClose={() => setIsCreateOpen(false)}
+          onCreated={handleCreated}
+        />
       )}
     </section>
   );

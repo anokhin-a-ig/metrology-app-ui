@@ -1,4 +1,9 @@
-import { fetchChildrenPage, fetchRootPage } from './departments';
+import {
+  createDepartment,
+  fetchChildrenPage,
+  fetchRootPage,
+  searchDepartments,
+} from './departments';
 
 const originalFetch = global.fetch;
 
@@ -85,4 +90,73 @@ test('использует запасное сообщение, если тел�
   );
 
   await expect(fetchRootPage()).rejects.toThrow('Ошибка запроса (500)');
+});
+
+test('создаёт департамент через POST с JSON-телом', async () => {
+  const created = {
+    id: 10,
+    name: 'Цех № 10',
+    type: 'WORKSHOP',
+    parent: { id: 1, name: 'Завод', type: 'FACTORY' },
+    children: [],
+    hasChildren: false,
+  };
+
+  global.fetch = jest.fn(() => jsonResponse(created, { status: 201 }));
+
+  const result = await createDepartment({
+    name: 'Цех № 10',
+    type: 'WORKSHOP',
+    parentId: 1,
+  });
+
+  expect(result).toEqual(created);
+  expect(global.fetch).toHaveBeenCalledWith('http://localhost:8080/api/v1/departments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Цех № 10', type: 'WORKSHOP', parentId: 1 }),
+  });
+});
+
+test('не отправляет parentId для корневого департамента', async () => {
+  global.fetch = jest.fn(() => jsonResponse({ id: 11 }, { status: 201 }));
+
+  await createDepartment({ name: 'Новый завод', type: 'FACTORY' });
+
+  expect(global.fetch).toHaveBeenCalledWith('http://localhost:8080/api/v1/departments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Новый завод', type: 'FACTORY' }),
+  });
+});
+
+test('ищет департаменты по части имени с отменой запроса', async () => {
+  const controller = new AbortController();
+  const found = [{ id: 2, name: 'Цех сборки', type: 'WORKSHOP' }];
+
+  global.fetch = jest.fn(() => jsonResponse(found));
+
+  const result = await searchDepartments('цех', { signal: controller.signal });
+
+  expect(result).toEqual(found);
+  expect(global.fetch).toHaveBeenCalledWith(
+    'http://localhost:8080/api/v1/departments/search-by-name?search=%D1%86%D0%B5%D1%85',
+    { signal: controller.signal }
+  );
+});
+
+test('пробрасывает message из ошибки создания', async () => {
+  global.fetch = jest.fn(() =>
+    jsonResponse(
+      {
+        message: 'Департамент с таким названием уже существует',
+        status: 400,
+      },
+      { ok: false, status: 400 }
+    )
+  );
+
+  await expect(
+    createDepartment({ name: 'Цех сборки', type: 'WORKSHOP', parentId: 1 })
+  ).rejects.toThrow('Департамент с таким названием уже существует');
 });

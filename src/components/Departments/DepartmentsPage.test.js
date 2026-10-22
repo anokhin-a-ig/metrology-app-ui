@@ -26,6 +26,26 @@ function errorResponse(message, status = 400) {
   });
 }
 
+function createdResponse(body) {
+  return Promise.resolve({
+    ok: true,
+    status: 201,
+    json: () => Promise.resolve(body),
+  });
+}
+
+function arrayResponse(body) {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve(body),
+  });
+}
+
+function postPayload(call) {
+  return JSON.parse(call[1].body);
+}
+
 const factory = {
   id: 1,
   name: 'Завод «ЭлектронПрибор»',
@@ -383,4 +403,163 @@ test('показывает ошибку дочерних внутри узла �
     url.includes('/by-parent?parentId=1')
   );
   expect(childRequests).toHaveLength(2);
+});
+
+test('открывает модальное окно создания', async () => {
+  global.fetch = jest.fn(() => pageResponse([factory]));
+
+  render(<DepartmentsPage />);
+  await screen.findByText(factory.name);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Новый' }));
+
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(screen.getByLabelText('Название')).toBeInTheDocument();
+  expect(screen.getByLabelText('Тип')).toBeInTheDocument();
+  expect(screen.getByLabelText('Входит в состав')).toBeInTheDocument();
+});
+
+test('создаёт FACTORY и перезагружает корневой список', async () => {
+  const newFactory = {
+    ...factory,
+    id: 5,
+    name: 'Завод «Новый»',
+    hasChildren: false,
+  };
+  let rootRequests = 0;
+
+  global.fetch = jest.fn((url, options = {}) => {
+    if (url.includes('/all-by-type')) {
+      rootRequests += 1;
+      return pageResponse(rootRequests === 1 ? [factory] : [factory, newFactory]);
+    }
+    if (url === 'http://localhost:8080/api/v1/departments' && options.method === 'POST') {
+      return createdResponse(newFactory);
+    }
+    return pageResponse([]);
+  });
+
+  render(<DepartmentsPage />);
+  await screen.findByText(factory.name);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Новый' }));
+  fireEvent.change(screen.getByLabelText('Название'), {
+    target: { value: 'Завод «Новый»' },
+  });
+  fireEvent.change(screen.getByLabelText('Тип'), {
+    target: { value: 'FACTORY' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить' }));
+
+  expect(
+    await screen.findByText('Департамент «Завод «Новый»» создан')
+  ).toBeInTheDocument();
+  expect(await screen.findByText(newFactory.name)).toBeInTheDocument();
+
+  const postCall = global.fetch.mock.calls.find(
+    ([, options]) => options && options.method === 'POST'
+  );
+  expect(postCall[0]).toBe('http://localhost:8080/api/v1/departments');
+  expect(postPayload(postCall)).toEqual({
+    name: 'Завод «Новый»',
+    type: 'FACTORY',
+  });
+  expect(rootRequests).toBe(2);
+});
+
+test('создаёт дочерний департамент и обновляет детей родителя', async () => {
+  const existingWorkshop = {
+    id: 2,
+    name: 'Цех старый',
+    type: 'WORKSHOP',
+    parent: { id: 1, name: factory.name, type: 'FACTORY' },
+    children: [],
+    hasChildren: false,
+  };
+  const newWorkshop = {
+    id: 3,
+    name: 'Цех новый',
+    type: 'WORKSHOP',
+    parent: { id: 1, name: factory.name, type: 'FACTORY' },
+    children: [],
+    hasChildren: false,
+  };
+  let childRequests = 0;
+
+  global.fetch = jest.fn((url, options = {}) => {
+    if (url.includes('/all-by-type')) {
+      return pageResponse([factory]);
+    }
+    if (url.includes('/by-parent?parentId=1')) {
+      childRequests += 1;
+      return pageResponse(
+        childRequests === 1 ? [existingWorkshop] : [existingWorkshop, newWorkshop]
+      );
+    }
+    if (url.includes('/search-by-name')) {
+      return arrayResponse([factory]);
+    }
+    if (url === 'http://localhost:8080/api/v1/departments' && options.method === 'POST') {
+      return createdResponse(newWorkshop);
+    }
+    return pageResponse([]);
+  });
+
+  render(<DepartmentsPage />);
+
+  const factoryRow = await screen.findByRole('row', { name: factory.name });
+  fireEvent.click(
+    within(factoryRow).getByRole('button', {
+      name: 'Раскрыть дочерние подразделения',
+    })
+  );
+  await screen.findByText(existingWorkshop.name);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Новый' }));
+  fireEvent.change(screen.getByLabelText('Название'), {
+    target: { value: newWorkshop.name },
+  });
+  fireEvent.change(screen.getByLabelText('Тип'), {
+    target: { value: 'WORKSHOP' },
+  });
+
+  const parentInput = screen.getByLabelText('Входит в состав');
+  fireEvent.focus(parentInput);
+  fireEvent.click(
+    await screen.findByRole('option', { name: /Завод «ЭлектронПрибор»/ })
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить' }));
+
+  expect(await screen.findByText(newWorkshop.name)).toBeInTheDocument();
+  expect(childRequests).toBe(2);
+});
+
+test('показывает ошибку дубликата и оставляет окно открытым', async () => {
+  global.fetch = jest.fn((url, options = {}) => {
+    if (url.includes('/all-by-type')) {
+      return pageResponse([factory]);
+    }
+    if (url === 'http://localhost:8080/api/v1/departments' && options.method === 'POST') {
+      return errorResponse('Департамент с таким названием уже существует', 400);
+    }
+    return pageResponse([]);
+  });
+
+  render(<DepartmentsPage />);
+  await screen.findByText(factory.name);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Новый' }));
+  fireEvent.change(screen.getByLabelText('Название'), {
+    target: { value: factory.name },
+  });
+  fireEvent.change(screen.getByLabelText('Тип'), {
+    target: { value: 'FACTORY' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить' }));
+
+  expect(
+    await screen.findByText('Департамент с таким названием уже существует')
+  ).toBeInTheDocument();
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
 });
