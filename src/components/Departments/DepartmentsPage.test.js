@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import DepartmentsPage from './DepartmentsPage';
 
 const originalFetch = global.fetch;
@@ -42,8 +42,33 @@ function arrayResponse(body) {
   });
 }
 
+function deletionCheckResponse(check = { canDelete: true, blockers: [] }) {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve(check),
+  });
+}
+
+function deleteResponse() {
+  return Promise.resolve({
+    ok: true,
+    status: 204,
+    json: () => Promise.reject(new Error('no body')),
+  });
+}
+
 function postPayload(call) {
   return JSON.parse(call[1].body);
+}
+
+function openDeleteMenu(name) {
+  fireEvent.click(
+    screen.getByRole('button', {
+      name: `Действия для департамента ${name}`,
+    })
+  );
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Удалить' }));
 }
 
 const factory = {
@@ -56,6 +81,7 @@ const factory = {
 };
 
 afterEach(() => {
+  jest.useRealTimers();
   global.fetch = originalFetch;
 });
 
@@ -562,4 +588,287 @@ test('показывает ошибку дубликата и оставляет
     await screen.findByText('Департамент с таким названием уже существует')
   ).toBeInTheDocument();
   expect(screen.getByRole('dialog')).toBeInTheDocument();
+});
+
+test('показывает меню действий и удаление в каждой строке', async () => {
+  const workshop = {
+    id: 2,
+    name: 'Цех № 1',
+    type: 'WORKSHOP',
+    parent: { id: 1, name: factory.name, type: 'FACTORY' },
+    children: [],
+    hasChildren: false,
+  };
+
+  global.fetch = jest.fn((url) => {
+    if (url.includes('/all-by-type')) {
+      return pageResponse([factory]);
+    }
+    return pageResponse([workshop]);
+  });
+
+  render(<DepartmentsPage />);
+
+  const factoryRow = await screen.findByRole('row', { name: factory.name });
+  const factoryMenuButton = within(factoryRow).getByRole('button', {
+    name: `Действия для департамента ${factory.name}`,
+  });
+
+  expect(factoryMenuButton).toHaveAttribute('aria-expanded', 'false');
+  expect(
+    screen.queryByRole('columnheader', { name: 'Действия' })
+  ).not.toBeInTheDocument();
+
+  fireEvent.click(factoryMenuButton);
+
+  expect(screen.getByRole('menuitem', { name: 'Удалить' })).toBeInTheDocument();
+  expect(factoryMenuButton).toHaveAttribute('aria-expanded', 'true');
+
+  fireEvent.keyDown(document, { key: 'Escape' });
+
+  expect(screen.queryByRole('menuitem', { name: 'Удалить' })).not.toBeInTheDocument();
+
+  fireEvent.click(
+    within(factoryRow).getByRole('button', {
+      name: 'Раскрыть дочерние подразделения',
+    })
+  );
+
+  const workshopRow = await screen.findByRole('row', { name: workshop.name });
+  expect(
+    within(workshopRow).getByRole('button', {
+      name: `Действия для департамента ${workshop.name}`,
+    })
+  ).toBeInTheDocument();
+});
+
+test('использует три колонки для статусных строк таблицы', async () => {
+  global.fetch = jest.fn((url) => {
+    if (url.includes('/all-by-type')) {
+      return pageResponse([factory]);
+    }
+    return pageResponse([]);
+  });
+
+  render(<DepartmentsPage />);
+
+  const factoryRow = await screen.findByRole('row', { name: factory.name });
+  fireEvent.click(
+    within(factoryRow).getByRole('button', {
+      name: 'Раскрыть дочерние подразделения',
+    })
+  );
+
+  const status = await screen.findByRole('cell', {
+    name: 'Нет дочерних подразделений',
+  });
+  expect(status).toHaveAttribute('colspan', '3');
+});
+
+test('открывает удаление, отменяет отсчёт и удаляет корневой департамент', async () => {
+  jest.useFakeTimers();
+  const leafFactory = { ...factory, hasChildren: false };
+  const otherFactory = {
+    ...factory,
+    id: 9,
+    name: 'Завод «Соседний»',
+    hasChildren: false,
+  };
+  let rootRequests = 0;
+
+  global.fetch = jest.fn((url, options = {}) => {
+    if (url.includes('/all-by-type')) {
+      rootRequests += 1;
+      return pageResponse(rootRequests === 1 ? [leafFactory] : [otherFactory]);
+    }
+    if (url.includes('/deletion-check')) {
+      return deletionCheckResponse();
+    }
+    if (options.method === 'DELETE') {
+      return deleteResponse();
+    }
+    return pageResponse([]);
+  });
+
+  render(<DepartmentsPage />);
+  await screen.findByText(leafFactory.name);
+
+  openDeleteMenu(leafFactory.name);
+
+  const input = await screen.findByLabelText(/Введите название/);
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+  fireEvent.change(input, { target: { value: leafFactory.name } });
+  fireEvent.click(screen.getByRole('button', { name: 'Удалить' }));
+  expect(screen.getByRole('timer')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Отменить удаление' }));
+  expect(await screen.findByLabelText(/Введите название/)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Удалить' }));
+
+  await act(async () => {
+    jest.advanceTimersByTime(5000);
+  });
+
+  expect(
+    await screen.findByText(`Департамент «${leafFactory.name}» удалён`)
+  ).toBeInTheDocument();
+  expect(await screen.findByText(otherFactory.name)).toBeInTheDocument();
+  expect(rootRequests).toBe(2);
+  expect(screen.getByRole('button', { name: 'Новый' })).toHaveFocus();
+});
+
+test('переходит на предыдущую страницу после удаления последнего элемента', async () => {
+  jest.useFakeTimers();
+  const firstFactory = {
+    ...factory,
+    id: 9,
+    name: 'Завод «Первый»',
+    hasChildren: false,
+  };
+  const leafFactory = {
+    ...factory,
+    id: 10,
+    name: 'Завод «Последний»',
+    hasChildren: false,
+  };
+  let pageOneRequests = 0;
+
+  global.fetch = jest.fn((url, options = {}) => {
+    if (url.includes('/all-by-type')) {
+      if (url.includes('page=1')) {
+        pageOneRequests += 1;
+        return pageResponse(
+          pageOneRequests === 1 ? [leafFactory] : [],
+          { number: 1, totalPages: 3, last: false }
+        );
+      }
+
+      return pageResponse([firstFactory], { number: 0, totalPages: 3, last: false });
+    }
+    if (url.includes('/deletion-check')) {
+      return deletionCheckResponse();
+    }
+    if (options.method === 'DELETE') {
+      return deleteResponse();
+    }
+    return pageResponse([]);
+  });
+
+  render(<DepartmentsPage />);
+  await screen.findByText(firstFactory.name);
+
+  fireEvent.click(screen.getByRole('button', { name: '2' }));
+  await screen.findByText(leafFactory.name);
+
+  openDeleteMenu(leafFactory.name);
+
+  const input = await screen.findByLabelText(/Введите название/);
+  fireEvent.change(input, { target: { value: leafFactory.name } });
+  fireEvent.click(screen.getByRole('button', { name: 'Удалить' }));
+
+  await act(async () => {
+    jest.advanceTimersByTime(5000);
+  });
+
+  expect(await screen.findByText(firstFactory.name)).toBeInTheDocument();
+  expect(pageOneRequests).toBe(2);
+  expect(
+    global.fetch.mock.calls.some(([url]) => url.includes('page=0'))
+  ).toBe(true);
+});
+
+test('обновляет детей и убирает раскрытие после удаления последнего ребёнка', async () => {
+  jest.useFakeTimers();
+  const workshop = {
+    id: 2,
+    name: 'Цех № 1',
+    type: 'WORKSHOP',
+    parent: { id: 1, name: factory.name, type: 'FACTORY' },
+    children: [],
+    hasChildren: false,
+  };
+  let childRequests = 0;
+
+  global.fetch = jest.fn((url, options = {}) => {
+    if (url.includes('/all-by-type')) {
+      return pageResponse([factory]);
+    }
+    if (url.includes('/by-parent?parentId=1')) {
+      childRequests += 1;
+      return pageResponse(childRequests === 1 ? [workshop] : []);
+    }
+    if (url.includes('/deletion-check')) {
+      return deletionCheckResponse();
+    }
+    if (options.method === 'DELETE') {
+      return deleteResponse();
+    }
+    return pageResponse([]);
+  });
+
+  render(<DepartmentsPage />);
+
+  const factoryRow = await screen.findByRole('row', { name: factory.name });
+  fireEvent.click(
+    within(factoryRow).getByRole('button', {
+      name: 'Раскрыть дочерние подразделения',
+    })
+  );
+  await screen.findByText(workshop.name);
+
+  openDeleteMenu(workshop.name);
+
+  const input = await screen.findByLabelText(/Введите название/);
+  fireEvent.change(input, { target: { value: workshop.name } });
+  fireEvent.click(screen.getByRole('button', { name: 'Удалить' }));
+
+  await act(async () => {
+    jest.advanceTimersByTime(5000);
+  });
+
+  await waitFor(() => {
+    expect(screen.queryByText(workshop.name)).not.toBeInTheDocument();
+  });
+  expect(
+    screen.queryByRole('button', { name: 'Раскрыть дочерние подразделения' })
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText('Нет дочерних подразделений')).not.toBeInTheDocument();
+  expect(
+    screen.getByText(`Департамент «${workshop.name}» удалён`)
+  ).toBeInTheDocument();
+});
+
+test('раскрывает дочерние из заблокированного окна удаления', async () => {
+  const workshop = {
+    id: 2,
+    name: 'Цех № 1',
+    type: 'WORKSHOP',
+    parent: { id: 1, name: factory.name, type: 'FACTORY' },
+    children: [],
+    hasChildren: false,
+  };
+
+  global.fetch = jest.fn((url) => {
+    if (url.includes('/all-by-type')) {
+      return pageResponse([factory]);
+    }
+    if (url.includes('/by-parent?parentId=1')) {
+      return pageResponse([workshop]);
+    }
+    return pageResponse([]);
+  });
+
+  render(<DepartmentsPage />);
+  await screen.findByText(factory.name);
+
+  openDeleteMenu(factory.name);
+
+  expect(await screen.findByText('Удаление невозможно')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Показать дочерние' }));
+
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(await screen.findByText(workshop.name)).toBeInTheDocument();
 });

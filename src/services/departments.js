@@ -2,6 +2,18 @@ import { PAGE_SIZE, ROOT_TYPE, SORT_DIRECTION } from './constants';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8080';
 
+async function readJson(response) {
+  if (response.status === 204) {
+    return null;
+  }
+
+  try {
+    return await response.json();
+  } catch (error) {
+    return null;
+  }
+}
+
 async function request(path, { method = 'GET', params, body, signal } = {}) {
   const query = params ? new URLSearchParams(params).toString() : '';
   const url = query ? `${API_BASE_URL}${path}?${query}` : `${API_BASE_URL}${path}`;
@@ -34,10 +46,12 @@ async function request(path, { method = 'GET', params, body, signal } = {}) {
       // Тело ошибки может быть пустым или не JSON.
     }
 
-    throw new Error(message);
+    const requestError = new Error(message);
+    requestError.status = response.status;
+    throw requestError;
   }
 
-  return response.json();
+  return readJson(response);
 }
 
 export function fetchRootPage({ page = 0, size = PAGE_SIZE, sortBy = SORT_DIRECTION } = {}) {
@@ -85,4 +99,12 @@ export function searchDepartments(search, { signal } = {}) {
     params: { search },
     signal,
   });
+}
+
+export function deleteDepartment(id) {
+  return request(`/api/v1/departments/${id}`, { method: 'DELETE' });
+}
+
+export function fetchDeletionCheck(id) {
+  return request(`/api/v1/departments/${id}/deletion-check`);
 }

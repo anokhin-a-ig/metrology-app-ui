@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { PAGE_SIZE, SORT_DIRECTION } from '../../services/constants';
 import { fetchChildrenPage, fetchRootPage } from '../../services/departments';
 import DepartmentCreateModal from './DepartmentCreateModal';
+import DepartmentDeleteModal from './DepartmentDeleteModal';
 import DepartmentTable from './DepartmentTable';
 import Legend from './Legend';
 import Pagination from './Pagination';
@@ -37,7 +38,9 @@ export default function DepartmentsPage() {
   const [expanded, setExpanded] = useState(() => new Set());
   const [childrenByParent, setChildrenByParent] = useState({});
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
+  const createButtonRef = useRef(null);
 
   const loadRoot = useCallback(async (targetPage) => {
     setPage((previous) => ({ ...previous, loading: true, error: null }));
@@ -48,9 +51,15 @@ export default function DepartmentsPage() {
         size: PAGE_SIZE,
         sortBy: SORT_DIRECTION,
       });
+      const items = data.content || [];
+
+      if (items.length === 0 && targetPage > 0) {
+        setPageNumber(targetPage - 1);
+        return;
+      }
 
       setPage({
-        items: data.content || [],
+        items,
         number: data.number ?? targetPage,
         totalPages: data.totalPages ?? 0,
         last: data.last ?? true,
@@ -108,6 +117,43 @@ export default function DepartmentsPage() {
     }
   }, []);
 
+  const markParentHasChildren = useCallback((parentId, value = true) => {
+    setPage((previous) => ({
+      ...previous,
+      items: previous.items.map((department) =>
+        department.id === parentId && department.hasChildren !== value
+          ? { ...department, hasChildren: value }
+          : department
+      ),
+    }));
+
+    setChildrenByParent((previous) => {
+      let changed = false;
+
+      const next = Object.fromEntries(
+        Object.entries(previous).map(([key, entry]) => {
+          let entryChanged = false;
+          const items = entry.items.map((department) => {
+            if (department.id === parentId && department.hasChildren !== value) {
+              entryChanged = true;
+              return { ...department, hasChildren: value };
+            }
+            return department;
+          });
+
+          if (entryChanged) {
+            changed = true;
+            return [key, { ...entry, items }];
+          }
+
+          return [key, entry];
+        })
+      );
+
+      return changed ? next : previous;
+    });
+  }, []);
+
   const refreshChildren = useCallback(
     async (parentId) => {
       const entry = childrenByParent[parentId];
@@ -140,6 +186,7 @@ export default function DepartmentsPage() {
           [],
           pages.flatMap((childrenPage) => childrenPage.content || [])
         );
+        const last = lastPage ? lastPage.last ?? entry.last : entry.last;
 
         setChildrenByParent((previous) => ({
           ...previous,
@@ -147,11 +194,35 @@ export default function DepartmentsPage() {
             items,
             page: entry.page,
             totalPages: lastPage ? lastPage.totalPages ?? entry.totalPages : entry.totalPages,
-            last: lastPage ? lastPage.last ?? entry.last : entry.last,
+            last,
             loading: false,
             error: null,
           },
         }));
+
+        if (items.length === 0 && last) {
+          markParentHasChildren(parentId, false);
+
+          setExpanded((previous) => {
+            if (!previous.has(parentId)) {
+              return previous;
+            }
+
+            const next = new Set(previous);
+            next.delete(parentId);
+            return next;
+          });
+
+          setChildrenByParent((previous) => {
+            if (!(parentId in previous)) {
+              return previous;
+            }
+
+            const next = { ...previous };
+            delete next[parentId];
+            return next;
+          });
+        }
       } catch (error) {
         setChildrenByParent((previous) => ({
           ...previous,
@@ -163,43 +234,8 @@ export default function DepartmentsPage() {
         }));
       }
     },
-    [childrenByParent]
+    [childrenByParent, markParentHasChildren]
   );
-
-  const markParentHasChildren = useCallback((parentId) => {
-    setPage((previous) => ({
-      ...previous,
-      items: previous.items.map((department) =>
-        department.id === parentId ? { ...department, hasChildren: true } : department
-      ),
-    }));
-
-    setChildrenByParent((previous) => {
-      let changed = false;
-
-      const next = Object.fromEntries(
-        Object.entries(previous).map(([key, entry]) => {
-          let entryChanged = false;
-          const items = entry.items.map((department) => {
-            if (department.id === parentId && !department.hasChildren) {
-              entryChanged = true;
-              return { ...department, hasChildren: true };
-            }
-            return department;
-          });
-
-          if (entryChanged) {
-            changed = true;
-            return [key, { ...entry, items }];
-          }
-
-          return [key, entry];
-        })
-      );
-
-      return changed ? next : previous;
-    });
-  }, []);
 
   const handleCreated = useCallback(
     (created) => {
@@ -217,6 +253,42 @@ export default function DepartmentsPage() {
       }
     },
     [loadRoot, markParentHasChildren, pageNumber, refreshChildren]
+  );
+
+  const handleDeleted = useCallback(
+    (deleted, { alreadyDeleted = false } = {}) => {
+      setDeleteTarget(null);
+      setSuccessMessage(
+        alreadyDeleted
+          ? `Департамент «${deleted.name}» уже был удалён`
+          : `Департамент «${deleted.name}» удалён`
+      );
+
+      setExpanded((previous) => {
+        const next = new Set(previous);
+        next.delete(deleted.id);
+        return next;
+      });
+
+      setChildrenByParent((previous) => {
+        if (!(deleted.id in previous)) {
+          return previous;
+        }
+
+        const next = { ...previous };
+        delete next[deleted.id];
+        return next;
+      });
+
+      if (deleted.parent && deleted.parent.id) {
+        refreshChildren(deleted.parent.id);
+      } else {
+        loadRoot(pageNumber);
+      }
+
+      createButtonRef.current?.focus();
+    },
+    [loadRoot, pageNumber, refreshChildren]
   );
 
   const handleToggle = useCallback(
@@ -238,6 +310,17 @@ export default function DepartmentsPage() {
       }
     },
     [childrenByParent, expanded, loadChildren]
+  );
+
+  const handleShowChildren = useCallback(
+    (department) => {
+      setDeleteTarget(null);
+
+      if (!expanded.has(department.id)) {
+        handleToggle(department);
+      }
+    },
+    [expanded, handleToggle]
   );
 
   const handleShowMore = useCallback(
@@ -269,9 +352,10 @@ export default function DepartmentsPage() {
     loadRoot(pageNumber);
   }, [loadRoot, pageNumber, reloadToken]);
 
-  useEffect(() => {
+  const handlePageChange = useCallback((nextPage) => {
     setSuccessMessage(null);
-  }, [pageNumber]);
+    setPageNumber(nextPage);
+  }, []);
 
   return (
     <section className="departments">
@@ -280,6 +364,7 @@ export default function DepartmentsPage() {
         <button
           type="button"
           className="departments__create"
+          ref={createButtonRef}
           onClick={() => setIsCreateOpen(true)}
         >
           Новый
@@ -320,11 +405,12 @@ export default function DepartmentsPage() {
             onToggle={handleToggle}
             onShowMore={handleShowMore}
             onRetryChildren={handleRetryChildren}
+            onDelete={setDeleteTarget}
           />
           <Pagination
             number={page.number}
             totalPages={page.totalPages}
-            onChange={setPageNumber}
+            onChange={handlePageChange}
             disabled={page.loading}
           />
         </>
@@ -334,6 +420,15 @@ export default function DepartmentsPage() {
         <DepartmentCreateModal
           onClose={() => setIsCreateOpen(false)}
           onCreated={handleCreated}
+        />
+      )}
+
+      {deleteTarget && (
+        <DepartmentDeleteModal
+          department={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={handleDeleted}
+          onShowChildren={handleShowChildren}
         />
       )}
     </section>

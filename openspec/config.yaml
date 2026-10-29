@@ -2,14 +2,20 @@ schema: spec-driven
 githubCopilot:
   cloudAgent: true
 
-# Project context (optional)
-# Add only constraints that should guide OpenSpec artifacts and workflows.
-# Include constraints an agent cannot infer by reading the code.
-# Keep general project documentation and discoverable codebase facts out.
-# Example:
-#   context: |
-#     Designs and tasks must cover Windows, macOS, and Linux
-#     Write all artifacts in Spanish
+context: |
+  Проект: SPA-каталог департаментов системы метрологии (Create React App, React 19, JavaScript).
+  Артефакты OpenSpec, UI-тексты и документация — на русском; заголовки спецификаций и SHALL/MUST — на английском.
+  Бэкенд — отдельный репозиторий D:\IDEA_projects\metrology-app (Spring Boot, REST /api/v1).
+  Детальный контракт API ведётся в OpenSpec бэкенда и доступен через store `metrology-backend`.
+  Фронтенд обращается к API только через `src/services`; базовый URL — `REACT_APP_API_BASE_URL`,
+  в dev используется proxy из package.json на http://localhost:8080.
+  Ошибки API приходят как `{ message, status, timestamp }`; UI показывает `message`.
+  Изменение контракта API требует парного change в бэкенде; в Impact указывать оба репозитория.
+
+references:
+  - metrology-backend
+
+# Per-artifact rules (optional)
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.

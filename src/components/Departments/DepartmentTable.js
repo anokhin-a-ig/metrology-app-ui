@@ -1,3 +1,5 @@
+import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { DEPARTMENT_TYPE_LABELS } from '../../services/constants';
 
 function collectRows(departments, depth, rows, expanded, childrenByParent) {
@@ -79,6 +81,117 @@ function StatusRow({ rowKey, depth, children }) {
   );
 }
 
+function DepartmentRowMenu({ department, onDelete }) {
+  const menuId = useId();
+  const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+  const menuItemRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState(null);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (
+        buttonRef.current?.contains(event.target) ||
+        menuRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+
+      setOpen(false);
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    };
+
+    const closeMenu = () => setOpen(false);
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+    menuItemRef.current?.focus();
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', closeMenu);
+      window.removeEventListener('scroll', closeMenu, true);
+    };
+  }, [open]);
+
+  const handleToggle = () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+
+    const rect = buttonRef.current?.getBoundingClientRect();
+
+    if (rect) {
+      setPosition({
+        top: rect.bottom + 4,
+        right: Math.max(8, window.innerWidth - rect.right),
+      });
+    }
+
+    setOpen(true);
+  };
+
+  const handleDelete = () => {
+    setOpen(false);
+    onDelete(department);
+  };
+
+  return (
+    <div className="department-table__menu-wrap">
+      <button
+        type="button"
+        ref={buttonRef}
+        className="department-table__menu-button"
+        aria-label={`Действия для департамента ${department.name}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        onClick={handleToggle}
+      >
+        …
+      </button>
+
+      {open &&
+        position &&
+        createPortal(
+          <div
+            className="department-table__menu"
+            role="menu"
+            id={menuId}
+            ref={menuRef}
+            style={{ top: position.top, right: position.right }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              ref={menuItemRef}
+              className="department-table__menu-item department-table__menu-item--danger"
+              onClick={handleDelete}
+            >
+              Удалить
+            </button>
+          </div>,
+          document.body
+        )}
+    </div>
+  );
+}
+
 export default function DepartmentTable({
   departments,
   expanded,
@@ -86,123 +199,131 @@ export default function DepartmentTable({
   onToggle,
   onShowMore,
   onRetryChildren,
+  onDelete,
 }) {
   const rows = collectRows(departments, 0, [], expanded, childrenByParent);
 
   return (
-    <table className="department-table">
-      <thead>
-        <tr>
-          <th scope="col">Название</th>
-          <th scope="col">Тип</th>
-          <th scope="col">Родительское подразделение</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => {
-          if (row.type === 'department') {
-            const { department } = row;
+    <div className="department-table-wrap">
+      <table className="department-table">
+        <thead>
+          <tr>
+            <th scope="col">Название</th>
+            <th scope="col">Тип</th>
+            <th scope="col">Родительское подразделение</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            if (row.type === 'department') {
+              const { department } = row;
 
-            return (
-              <tr key={row.key} data-depth={row.depth} aria-label={department.name}>
-                <td>
-                  <div
-                    className="department-table__name"
-                    style={indentStyle(row.depth)}
+              return (
+                <tr key={row.key} data-depth={row.depth} aria-label={department.name}>
+                  <td>
+                    <div
+                      className="department-table__name"
+                      style={indentStyle(row.depth)}
+                    >
+                      {department.hasChildren ? (
+                        <button
+                          type="button"
+                          className="department-table__toggle"
+                          aria-expanded={row.expanded}
+                          aria-label={
+                            row.expanded ? 'Свернуть' : 'Раскрыть дочерние подразделения'
+                          }
+                          onClick={() => onToggle(department)}
+                        >
+                          {row.expanded ? '−' : '+'}
+                        </button>
+                      ) : (
+                        <span
+                          className="department-table__toggle-placeholder"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span>{department.name}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <span
+                      className={`type-badge type-badge--${department.type.toLowerCase()}`}
+                    >
+                      {DEPARTMENT_TYPE_LABELS[department.type] || department.type}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="department-table__parent-cell">
+                      <span>{department.parent ? department.parent.name : '—'}</span>
+                      <DepartmentRowMenu department={department} onDelete={onDelete} />
+                    </div>
+                  </td>
+                </tr>
+              );
+            }
+
+            if (row.type === 'loading') {
+              return (
+                <StatusRow key={row.key} rowKey={row.key} depth={row.depth}>
+                  Загрузка…
+                </StatusRow>
+              );
+            }
+
+            if (row.type === 'empty') {
+              return (
+                <StatusRow key={row.key} rowKey={row.key} depth={row.depth}>
+                  Нет дочерних подразделений
+                </StatusRow>
+              );
+            }
+
+            if (row.type === 'error') {
+              return (
+                <StatusRow key={row.key} rowKey={row.key} depth={row.depth}>
+                  <span>Не удалось загрузить дочерние подразделения</span>
+                  <button
+                    type="button"
+                    className="department-table__retry"
+                    onClick={() => onRetryChildren(row.parentId)}
                   >
-                    {department.hasChildren ? (
-                      <button
-                        type="button"
-                        className="department-table__toggle"
-                        aria-expanded={row.expanded}
-                        aria-label={
-                          row.expanded ? 'Свернуть' : 'Раскрыть дочерние подразделения'
-                        }
-                        onClick={() => onToggle(department)}
-                      >
-                        {row.expanded ? '−' : '+'}
-                      </button>
-                    ) : (
-                      <span
-                        className="department-table__toggle-placeholder"
-                        aria-hidden="true"
-                      />
-                    )}
-                    <span>{department.name}</span>
-                  </div>
-                </td>
-                <td>
-                  <span
-                    className={`type-badge type-badge--${department.type.toLowerCase()}`}
+                    Повторить
+                  </button>
+                </StatusRow>
+              );
+            }
+
+            if (row.error) {
+              return (
+                <StatusRow key={row.key} rowKey={row.key} depth={row.depth}>
+                  <span>Не удалось загрузить дочерние подразделения</span>
+                  <button
+                    type="button"
+                    className="department-table__retry"
+                    onClick={() => onRetryChildren(row.parentId)}
                   >
-                    {DEPARTMENT_TYPE_LABELS[department.type] || department.type}
-                  </span>
-                </td>
-                <td>{department.parent ? department.parent.name : '—'}</td>
-              </tr>
-            );
-          }
+                    Повторить
+                  </button>
+                </StatusRow>
+              );
+            }
 
-          if (row.type === 'loading') {
             return (
               <StatusRow key={row.key} rowKey={row.key} depth={row.depth}>
-                Загрузка…
-              </StatusRow>
-            );
-          }
-
-          if (row.type === 'empty') {
-            return (
-              <StatusRow key={row.key} rowKey={row.key} depth={row.depth}>
-                Нет дочерних подразделений
-              </StatusRow>
-            );
-          }
-
-          if (row.type === 'error') {
-            return (
-              <StatusRow key={row.key} rowKey={row.key} depth={row.depth}>
-                <span>Не удалось загрузить дочерние подразделения</span>
                 <button
                   type="button"
-                  className="department-table__retry"
-                  onClick={() => onRetryChildren(row.parentId)}
+                  className="department-table__show-more"
+                  onClick={() => onShowMore(row.parentId)}
+                  disabled={row.loading}
                 >
-                  Повторить
+                  Показать ещё
                 </button>
               </StatusRow>
             );
-          }
-
-          if (row.error) {
-            return (
-              <StatusRow key={row.key} rowKey={row.key} depth={row.depth}>
-                <span>Не удалось загрузить дочерние подразделения</span>
-                <button
-                  type="button"
-                  className="department-table__retry"
-                  onClick={() => onRetryChildren(row.parentId)}
-                >
-                  Повторить
-                </button>
-              </StatusRow>
-            );
-          }
-
-          return (
-            <StatusRow key={row.key} rowKey={row.key} depth={row.depth}>
-              <button
-                type="button"
-                className="department-table__show-more"
-                onClick={() => onShowMore(row.parentId)}
-                disabled={row.loading}
-              >
-                Показать ещё
-              </button>
-            </StatusRow>
-          );
-        })}
-      </tbody>
-    </table>
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

@@ -10,3 +10,4 @@ export const DEPARTMENT_TYPE_LABELS = {
 export const ROOT_TYPE = 'FACTORY';
 export const PAGE_SIZE = 10;
 export const SORT_DIRECTION = 'ASC';
+export const DELETE_COUNTDOWN_SECONDS = 5;

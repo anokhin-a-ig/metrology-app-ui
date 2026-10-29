@@ -1,6 +1,8 @@
 import {
   createDepartment,
+  deleteDepartment,
   fetchChildrenPage,
+  fetchDeletionCheck,
   fetchRootPage,
   searchDepartments,
 } from './departments';
@@ -159,4 +161,90 @@ test('пробрасывает message из ошибки создания', asyn
   await expect(
     createDepartment({ name: 'Цех сборки', type: 'WORKSHOP', parentId: 1 })
   ).rejects.toThrow('Департамент с таким названием уже существует');
+});
+
+test('удаляет департамент через DELETE и возвращает null для 204', async () => {
+  global.fetch = jest.fn(() =>
+    Promise.resolve({
+      ok: true,
+      status: 204,
+      json: () => Promise.reject(new Error('no body')),
+    })
+  );
+
+  await expect(deleteDepartment(7)).resolves.toBeNull();
+  expect(global.fetch).toHaveBeenCalledWith(
+    'http://localhost:8080/api/v1/departments/7',
+    { method: 'DELETE' }
+  );
+});
+
+test('возвращает тело DELETE 200 "123" без падения', async () => {
+  global.fetch = jest.fn(() => jsonResponse('123'));
+
+  await expect(deleteDepartment(7)).resolves.toBe('123');
+});
+
+test('возвращает null для пустого тела успешного ответа', async () => {
+  global.fetch = jest.fn(() =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new Error('Unexpected end of JSON input')),
+    })
+  );
+
+  await expect(deleteDepartment(7)).resolves.toBeNull();
+});
+
+test('сохраняет status в ошибке DELETE', async () => {
+  global.fetch = jest.fn(() =>
+    jsonResponse(
+      {
+        message: 'Не удалось удалить департамент',
+        status: 400,
+      },
+      { ok: false, status: 400 }
+    )
+  );
+
+  await expect(deleteDepartment(7)).rejects.toMatchObject({
+    message: 'Не удалось удалить департамент',
+    status: 400,
+  });
+});
+
+test('запрашивает проверку удаления по id', async () => {
+  const check = {
+    canDelete: false,
+    blockers: [
+      { type: 'CHILDREN', count: 3 },
+      { type: 'EMPLOYEES', count: 12 },
+      { type: 'MEASUREMENTS', count: 0 },
+    ],
+  };
+
+  global.fetch = jest.fn(() => jsonResponse(check));
+
+  await expect(fetchDeletionCheck(5)).resolves.toEqual(check);
+  expect(global.fetch).toHaveBeenCalledWith(
+    'http://localhost:8080/api/v1/departments/5/deletion-check'
+  );
+});
+
+test('различает статусы ошибок проверки удаления и сетевую ошибку', async () => {
+  for (const status of [404, 501, 400]) {
+    global.fetch = jest.fn(() =>
+      jsonResponse({ message: `Ошибка ${status}` }, { ok: false, status })
+    );
+
+    await expect(fetchDeletionCheck(5)).rejects.toMatchObject({ status });
+  }
+
+  global.fetch = jest.fn(() => Promise.reject(new TypeError('Failed to fetch')));
+
+  const networkError = await fetchDeletionCheck(5).catch((error) => error);
+
+  expect(networkError).toBeInstanceOf(TypeError);
+  expect(networkError.status).toBeUndefined();
 });
